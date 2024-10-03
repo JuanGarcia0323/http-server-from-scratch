@@ -1,12 +1,12 @@
+static SUCCES_RESPONSE_FILE: &'static str = include_str!("./response.txt");
 use std::{
     collections::HashMap,
     io::{prelude::*, BufReader},
     net::{Shutdown, TcpStream},
-    rc::Rc,
 };
 
 #[derive(Debug)]
-pub enum Methods {
+pub enum Method {
     GET,
     POST,
     PUT,
@@ -14,88 +14,103 @@ pub enum Methods {
     PATCH,
 }
 
-static SUCCES_RESPONSE_FILE: &'static str = include_str!("./response.txt");
+#[derive(Debug)]
+pub struct Endpoint(String);
+impl Endpoint {
+    pub fn new(route: &str) -> Self {
+        Endpoint(String::from(route))
+    }
+    pub fn get(&self) -> &str {
+        &self.0
+    }
+}
 
 #[derive(Debug)]
-pub struct Connections {
-    stream: TcpStream,
-    request: Vec<String>,
-    method: Option<Methods>,
-    route: Option<String>,
+pub struct Connection {
+    http_request: Vec<String>,
 }
-impl Connections {
-    pub fn new(mut stream: TcpStream) -> Self {
-        let buf_reader = BufReader::new(&mut stream);
+impl Connection {
+    pub fn new(stream: &mut TcpStream) -> Self {
+        let buf_reader = BufReader::new(stream);
         let http_request: Vec<String> = buf_reader
             .lines()
             .map(|result| result.unwrap())
             .take_while(|line| !line.is_empty())
             .collect();
-
         let first_line: Vec<&str> = match http_request.get(0) {
-            Some(line) => line.split(" ").collect(),
+            Some(r) => r.split(" ").collect(),
             None => vec![],
         };
 
-        let method = match first_line.get(0) {
-            Some(m) => *m,
+        let route = match first_line.get(1) {
+            Some(r) => Some(*r),
+            None => None,
+        };
+        let request_method = match first_line.get(0) {
+            Some(r) => *r,
             None => "",
         };
 
+        let method = match request_method {
+            "GET" => Some(Method::GET),
+            "POST" => Some(Method::POST),
+            "PUT" => Some(Method::PUT),
+            "DELETE" => Some(Method::DELETE),
+            "PATCH" => Some(Method::PATCH),
+            _ => Some(Method::GET),
+        };
+        let endpoint = match route {
+            Some(r) => Some(Endpoint::new(r)),
+            _ => None,
+        };
+        Connection { http_request }
+    }
+    pub fn get_method(&self) -> Method {
+        let http_request = &self.http_request;
+        let first_line: Vec<&str> = match http_request.get(0) {
+            Some(r) => r.split(" ").collect(),
+            None => vec![],
+        };
+        let request_method = match first_line.get(0) {
+            Some(r) => *r,
+            None => "",
+        };
+
+        match request_method {
+            "GET" => Method::GET,
+            "POST" => Method::POST,
+            "PUT" => Method::PUT,
+            "DELETE" => Method::DELETE,
+            "PATCH" => Method::PATCH,
+            _ => Method::GET,
+        }
+    }
+    pub fn get_endpoint(&self) -> Endpoint {
+        let http_request = &self.http_request;
+        let first_line: Vec<&str> = match http_request.get(0) {
+            Some(r) => r.split(" ").collect(),
+            None => vec![],
+        };
         let route = match first_line.get(1) {
-            Some(m) => Some(String::from(*m)),
+            Some(r) => Some(*r),
             None => None,
         };
 
-        match stream.write(b"HTTP/1.1 200 OK") {
-            Ok(_) => {
-                println!("Response was writen")
-            }
-            _ => stream
-                .shutdown(Shutdown::Both)
-                .expect("Somenthing went wrong"),
-        };
-
-        Connections {
-            stream,
-            method: match method {
-                "GET" => Some(Methods::GET),
-                "POST" => Some(Methods::POST),
-                "PUT" => Some(Methods::PUT),
-                "DELETE" => Some(Methods::DELETE),
-                "PATCH" => Some(Methods::PATCH),
-                _ => None,
-            },
-            request: http_request,
-            route,
+        match route {
+            Some(r) => Endpoint::new(r),
+            _ => Endpoint::new(""),
         }
     }
-
-    pub fn write_response(&mut self, message: &str) {
+    pub fn write_response(stream: &mut TcpStream, message: &str) {
         let response = SUCCES_RESPONSE_FILE
             .replace("{{len}}", &message.len().to_string())
             .replace("{{message}}", &message);
 
-        self.stream.write(&response.as_bytes()).unwrap();
-    }
-
-    pub fn get_request(&self) -> String {
-        self.request.join("\n")
-    }
-
-    pub fn get_route(&self) -> &str {
-        match &self.route {
-            Some(r) => &r,
-            None => "",
-        }
-    }
-
-    pub fn get_method(&self) -> Methods {
-        Methods::GET
+        stream.write(&response.as_bytes()).unwrap();
     }
 }
 
-type MethodTable<'a> = HashMap<&'a str, &'a dyn Fn(&mut TcpStream)>;
+type MethodTable<'a> = HashMap<&'a str, fn(&mut TcpStream)>;
 pub struct Router<'a> {
     put: MethodTable<'a>,
     post: MethodTable<'a>,
@@ -113,27 +128,27 @@ impl<'a> Router<'a> {
             get: HashMap::new(),
         }
     }
-    pub fn create(&mut self, name: &'a str, method: Methods, action: &'a dyn Fn(&mut TcpStream)) {
+    pub fn create(&mut self, name: &'a str, method: Method, action: fn(&mut TcpStream)) {
         match method {
-            Methods::GET => self.get.insert(name, action),
-            Methods::PUT => self.put.insert(name, action),
-            Methods::POST => self.post.insert(name, action),
-            Methods::PATCH => self.patch.insert(name, action),
-            Methods::DELETE => self.delete.insert(name, action),
+            Method::GET => self.get.insert(name, action),
+            Method::PUT => self.put.insert(name, action),
+            Method::POST => self.post.insert(name, action),
+            Method::PATCH => self.patch.insert(name, action),
+            Method::DELETE => self.delete.insert(name, action),
         };
     }
     pub fn handle_connection(
         &self,
-        name: &'a str,
-        method: &'a Methods,
+        endpoint: Endpoint,
+        method: &'a Method,
         connection: &mut TcpStream,
     ) {
         let action = *match method {
-            Methods::GET => self.get.get(&name).unwrap(),
-            Methods::POST => self.post.get(&name).unwrap(),
-            Methods::PUT => self.put.get(&name).unwrap(),
-            Methods::PATCH => self.patch.get(&name).unwrap(),
-            Methods::DELETE => self.delete.get(&name).unwrap(),
+            Method::GET => self.get.get(endpoint.get()).unwrap(),
+            Method::POST => self.post.get(endpoint.get()).unwrap(),
+            Method::PUT => self.put.get(endpoint.get()).unwrap(),
+            Method::PATCH => self.patch.get(endpoint.get()).unwrap(),
+            Method::DELETE => self.delete.get(endpoint.get()).unwrap(),
         };
         action(connection);
     }
