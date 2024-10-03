@@ -90,20 +90,18 @@ impl Connections {
         }
     }
 
-    pub fn get_method(&self) -> &Methods {
-        match &self.method {
-            Some(m) => &m,
-            None => &Methods::GET,
-        }
+    pub fn get_method(&self) -> Methods {
+        Methods::GET
     }
 }
 
+type MethodTable<'a> = HashMap<&'a str, &'a dyn Fn(&mut TcpStream)>;
 pub struct Router<'a> {
-    put: HashMap<&'a str, fn()>,
-    post: HashMap<&'a str, fn()>,
-    delete: HashMap<&'a str, fn()>,
-    patch: HashMap<&'a str, fn()>,
-    get: HashMap<&'a str, fn()>,
+    put: MethodTable<'a>,
+    post: MethodTable<'a>,
+    delete: MethodTable<'a>,
+    patch: MethodTable<'a>,
+    get: MethodTable<'a>,
 }
 impl<'a> Router<'a> {
     pub fn new() -> Router<'a> {
@@ -115,7 +113,7 @@ impl<'a> Router<'a> {
             get: HashMap::new(),
         }
     }
-    pub fn create(&mut self, name: &'a str, method: Methods, action: fn()) {
+    pub fn create(&mut self, name: &'a str, method: Methods, action: &'a dyn Fn(&mut TcpStream)) {
         match method {
             Methods::GET => self.get.insert(name, action),
             Methods::PUT => self.put.insert(name, action),
@@ -124,7 +122,12 @@ impl<'a> Router<'a> {
             Methods::DELETE => self.delete.insert(name, action),
         };
     }
-    pub fn handle_connection(&self, name: &'a str, method: &'a Methods) {
+    pub fn handle_connection(
+        &self,
+        name: &'a str,
+        method: &'a Methods,
+        connection: &mut TcpStream,
+    ) {
         let action = *match method {
             Methods::GET => self.get.get(&name).unwrap(),
             Methods::POST => self.post.get(&name).unwrap(),
@@ -132,6 +135,6 @@ impl<'a> Router<'a> {
             Methods::PATCH => self.patch.get(&name).unwrap(),
             Methods::DELETE => self.delete.get(&name).unwrap(),
         };
-        action();
+        action(connection);
     }
 }

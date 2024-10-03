@@ -1,41 +1,65 @@
+static SUCCES_RESPONSE_FILE: &'static str = include_str!("./requests/response.txt");
 pub mod requests;
 use requests::request_handler::{Connections, Methods, Router};
-use std::net::{TcpListener, TcpStream};
+use std::{
+    io::{prelude::*, BufReader},
+    net::{TcpListener, TcpStream},
+};
 
-fn handle_connection(stream: TcpStream) {
-    let mut router = Router::new();
-    let connection = Connections::new(stream);
-
-    let method = connection.get_method();
-    let route = connection.get_route();
-
-    fn test_get() {
-        println!("Test");
+struct Endpoint {
+    route: String,
+}
+impl Endpoint {
+    fn new(route: &str) -> Self {
+        Endpoint {
+            route: String::from(route),
+        }
     }
-    router.create("/otra-ruta/", Methods::GET, test_get);
-    router.handle_connection(route, method);
-    // println!("Este es el request:\n {}", connection.get_request());
-    // let method = connection.get_method().unwrap();
-    // let route = connection.get_route().unwrap();
+}
 
-    // match route {
-    //     Some(r) => println!("{r}"),
-    //     _ => (),
-    // }
+fn handle_connection(mut stream: TcpStream) {
+    let mut router = Router::new();
+    let buf_reader = BufReader::new(&mut stream);
+    let http_request: Vec<String> = buf_reader
+        .lines()
+        .map(|result| result.unwrap())
+        .take_while(|line| !line.is_empty())
+        .collect();
+    let first_line: Vec<&str> = match http_request.get(0) {
+        Some(r) => r.split(" ").collect(),
+        None => vec![],
+    };
 
-    // match method {
-    //     Some(Methods::GET) => {
-    //         println!("Vamos chabon que era un GET!")
-    //     }
-    //     _ => (),
-    // }
+    let route = match first_line.get(1) {
+        Some(r) => *r,
+        None => "",
+    };
+    let request_method = match first_line.get(0) {
+        Some(r) => *r,
+        None => "",
+    };
+    let method = match request_method {
+        "GET" => Methods::GET,
+        "POST" => Methods::POST,
+        "PUT" => Methods::PUT,
+        "DELETE" => Methods::DELETE,
+        "PATCH" => Methods::PATCH,
+        _ => Methods::GET,
+    };
+    let endpoint = Endpoint::new(route);
 
-    // let test_router = || {
-    //     println!("Testing");
-    //     connection.write_response("Esto viene del response");
-    // };
+    fn test(connection: &mut TcpStream) {
+        let message = "We did it";
+        let response = SUCCES_RESPONSE_FILE
+            .replace("{{len}}", &message.len().to_string())
+            .replace("{{message}}", &message);
 
-    // router.create(route, &method, &test_router);
+        connection.write(&response.as_bytes()).unwrap();
+    }
+
+    router.create("/otra-ruta/", Methods::GET, &test);
+    println!("{}", http_request.join("\n"));
+    router.handle_connection(&endpoint.route, &method, &mut stream);
 }
 
 fn main() {
