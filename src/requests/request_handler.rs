@@ -2,7 +2,7 @@ static SUCCES_RESPONSE_FILE: &'static str = include_str!("./response.txt");
 use std::{
     collections::HashMap,
     io::{prelude::*, BufReader},
-    net::{Shutdown, TcpStream},
+    net::{Shutdown, TcpListener, TcpStream},
 };
 
 #[derive(Debug)]
@@ -37,32 +37,7 @@ impl Connection {
             .map(|result| result.unwrap())
             .take_while(|line| !line.is_empty())
             .collect();
-        let first_line: Vec<&str> = match http_request.get(0) {
-            Some(r) => r.split(" ").collect(),
-            None => vec![],
-        };
 
-        let route = match first_line.get(1) {
-            Some(r) => Some(*r),
-            None => None,
-        };
-        let request_method = match first_line.get(0) {
-            Some(r) => *r,
-            None => "",
-        };
-
-        let method = match request_method {
-            "GET" => Some(Method::GET),
-            "POST" => Some(Method::POST),
-            "PUT" => Some(Method::PUT),
-            "DELETE" => Some(Method::DELETE),
-            "PATCH" => Some(Method::PATCH),
-            _ => Some(Method::GET),
-        };
-        let endpoint = match route {
-            Some(r) => Some(Endpoint::new(r)),
-            _ => None,
-        };
         Connection { http_request }
     }
     pub fn get_method(&self) -> Method {
@@ -101,7 +76,7 @@ impl Connection {
             _ => Endpoint::new(""),
         }
     }
-    pub fn write_response(stream: &mut TcpStream, message: &str) {
+    pub fn write_response(stream: &mut TcpStream, message: &String) {
         let response = SUCCES_RESPONSE_FILE
             .replace("{{len}}", &message.len().to_string())
             .replace("{{message}}", &message);
@@ -110,17 +85,17 @@ impl Connection {
     }
 }
 
-type MethodTable<'a> = HashMap<&'a str, fn(&mut TcpStream)>;
-pub struct Router<'a> {
+type MethodTable<'a> = HashMap<&'a str, fn() -> String>;
+pub struct App<'a> {
     put: MethodTable<'a>,
     post: MethodTable<'a>,
     delete: MethodTable<'a>,
     patch: MethodTable<'a>,
     get: MethodTable<'a>,
 }
-impl<'a> Router<'a> {
-    pub fn new() -> Router<'a> {
-        Router {
+impl<'a> App<'a> {
+    pub fn new() -> App<'a> {
+        App {
             put: HashMap::new(),
             post: HashMap::new(),
             delete: HashMap::new(),
@@ -128,7 +103,7 @@ impl<'a> Router<'a> {
             get: HashMap::new(),
         }
     }
-    pub fn create(&mut self, name: &'a str, method: Method, action: fn(&mut TcpStream)) {
+    pub fn create(&mut self, name: &'a str, method: Method, action: fn() -> String) {
         match method {
             Method::GET => self.get.insert(name, action),
             Method::PUT => self.put.insert(name, action),
@@ -150,6 +125,25 @@ impl<'a> Router<'a> {
             Method::PATCH => self.patch.get(endpoint.get()).unwrap(),
             Method::DELETE => self.delete.get(endpoint.get()).unwrap(),
         };
-        action(connection);
+        let result = action();
+        Connection::write_response(connection, &result)
+    }
+    fn redirect_stream(&self, mut stream: TcpStream) {
+        let connection = Connection::new(&mut stream);
+        let method = connection.get_method();
+        let endpoint = connection.get_endpoint();
+
+        self.handle_connection(endpoint, &method, &mut stream);
+    }
+    pub fn listen(&self, port: u32) {
+        let listener = TcpListener::bind(format!("127.0.0.1:{port}")).unwrap();
+        for stream in listener.incoming() {
+            match stream {
+                Ok(stream) => self.redirect_stream(stream),
+                Err(_) => {
+                    println!("Not working");
+                }
+            }
+        }
     }
 }
