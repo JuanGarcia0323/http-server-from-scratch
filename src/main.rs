@@ -8,6 +8,6 @@ fn main() {
         String::from("I'm a beast")
     }
 
-    app.create("/otra-ruta/", Method::GET, test);
+    app.create("/otra-ruta/", Method::POST, test);
     app.listen(3000);
 }

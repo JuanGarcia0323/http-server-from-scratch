@@ -1,6 +1,8 @@
 static SUCCES_RESPONSE_FILE: &'static str = include_str!("./response.txt");
+use core::{fmt, str};
 use std::{
     collections::HashMap,
+    fmt::Display,
     io::{prelude::*, BufReader},
     net::{Shutdown, TcpListener, TcpStream},
 };
@@ -25,18 +27,75 @@ impl Endpoint {
     }
 }
 
-#[derive(Debug)]
 pub struct Connection {
     http_request: Vec<String>,
 }
 impl Connection {
     pub fn new(stream: &mut TcpStream) -> Self {
-        let buf_reader = BufReader::new(stream);
+        let mut buf_reader = BufReader::new(stream);
         let http_request: Vec<String> = buf_reader
+            .by_ref()
             .lines()
-            .map(|result| result.unwrap())
+            .map(|result| match result {
+                Ok(r) => r,
+                Err(_) => String::new(),
+            })
             .take_while(|line| !line.is_empty())
             .collect();
+
+        println!("{:?}", http_request);
+
+        let content_lenght: u64 =
+            String::from(http_request[1].split(": ").collect::<Vec<&str>>()[1])
+                .parse()
+                .unwrap();
+
+        // let mut i: usize = 0;
+        // let bytes_taken: Vec<String> = buf_reader
+        //     .lines()
+        //     .map(|result| match result {
+        //         Ok(r) => r,
+        //         Err(_) => String::new(),
+        //     })
+        //     .take_while(|line| {
+        //         let len = line.len();
+        //         i += len;
+        //         let result = i >= content_lenght;
+        //         println!("{i}, {content_lenght}, {len}");
+        //         println!("Result {result}");
+        //         false
+        //     })
+        //     .collect();
+
+        let mut content = String::new();
+        let _ = buf_reader.take(content_lenght).read_to_string(&mut content);
+
+        println!("Bytes taken: {}", content);
+
+        // let mut content = [0;content_lenght*4];
+        // buf_reader.read_exact(&mut content);
+
+        // buf_reader.read
+
+        // println!("{:?}", content);
+
+        // let stream_bytes: Vec<u8> = buf_reader
+        //     .lines()
+        //     .map(|f| f.unwrap().pop())
+        //     .into_iter()
+        //     .take_while(|b| match b {
+        //         Ok(info) => !info != b'}',
+        //         Err(_) => false,
+        //     })
+        //     .map(|r| r.unwrap())
+        //     .collect();
+
+        // let test = match str::from_utf8(&stream_bytes) {
+        //     Ok(v) => v,
+        //     Err(_) => "",
+        // };
+
+        // println!("{:?}", test);
 
         Connection { http_request }
     }
@@ -82,6 +141,12 @@ impl Connection {
             .replace("{{message}}", &message);
 
         stream.write(&response.as_bytes()).unwrap();
+    }
+}
+impl Display for Connection {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let http_request = self.http_request.join("\n").to_string();
+        write!(f, "{}", http_request)
     }
 }
 
@@ -130,6 +195,7 @@ impl<'a> App<'a> {
     }
     fn redirect_stream(&self, mut stream: TcpStream) {
         let connection = Connection::new(&mut stream);
+        // println!("{connection}");
         let method = connection.get_method();
         let endpoint = connection.get_endpoint();
 
