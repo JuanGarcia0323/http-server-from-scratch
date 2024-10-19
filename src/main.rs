@@ -4,8 +4,8 @@ use requests::request_handler::{App, Method};
 fn main() {
     let mut app = App::new();
 
-    fn test() -> String {
-        String::from("I'm a beast")
+    fn test(content: &str) -> String {
+        String::from(content)
     }
 
     app.create("/otra-ruta/", Method::POST, test);

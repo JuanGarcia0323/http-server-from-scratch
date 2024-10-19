@@ -4,7 +4,7 @@ use std::{
     collections::HashMap,
     fmt::Display,
     io::{prelude::*, BufReader},
-    net::{Shutdown, TcpListener, TcpStream},
+    net::{TcpListener, TcpStream},
 };
 
 #[derive(Debug)]
@@ -29,10 +29,12 @@ impl Endpoint {
 
 pub struct Connection {
     http_request: Vec<String>,
+    content: String,
+    stream: TcpStream,
 }
 impl Connection {
-    pub fn new(stream: &mut TcpStream) -> Self {
-        let mut buf_reader = BufReader::new(stream);
+    pub fn new(stream: TcpStream) -> Self {
+        let mut buf_reader = BufReader::new(&stream);
         let http_request: Vec<String> = buf_reader
             .by_ref()
             .lines()
@@ -50,54 +52,14 @@ impl Connection {
                 .parse()
                 .unwrap();
 
-        // let mut i: usize = 0;
-        // let bytes_taken: Vec<String> = buf_reader
-        //     .lines()
-        //     .map(|result| match result {
-        //         Ok(r) => r,
-        //         Err(_) => String::new(),
-        //     })
-        //     .take_while(|line| {
-        //         let len = line.len();
-        //         i += len;
-        //         let result = i >= content_lenght;
-        //         println!("{i}, {content_lenght}, {len}");
-        //         println!("Result {result}");
-        //         false
-        //     })
-        //     .collect();
-
         let mut content = String::new();
         let _ = buf_reader.take(content_lenght).read_to_string(&mut content);
 
-        println!("Bytes taken: {}", content);
-
-        // let mut content = [0;content_lenght*4];
-        // buf_reader.read_exact(&mut content);
-
-        // buf_reader.read
-
-        // println!("{:?}", content);
-
-        // let stream_bytes: Vec<u8> = buf_reader
-        //     .lines()
-        //     .map(|f| f.unwrap().pop())
-        //     .into_iter()
-        //     .take_while(|b| match b {
-        //         Ok(info) => !info != b'}',
-        //         Err(_) => false,
-        //     })
-        //     .map(|r| r.unwrap())
-        //     .collect();
-
-        // let test = match str::from_utf8(&stream_bytes) {
-        //     Ok(v) => v,
-        //     Err(_) => "",
-        // };
-
-        // println!("{:?}", test);
-
-        Connection { http_request }
+        Connection {
+            http_request,
+            content,
+            stream,
+        }
     }
     pub fn get_method(&self) -> Method {
         let http_request = &self.http_request;
@@ -135,12 +97,12 @@ impl Connection {
             _ => Endpoint::new(""),
         }
     }
-    pub fn write_response(stream: &mut TcpStream, message: &String) {
+    pub fn write_response(&mut self, message: &String) {
         let response = SUCCES_RESPONSE_FILE
             .replace("{{len}}", &message.len().to_string())
             .replace("{{message}}", &message);
 
-        stream.write(&response.as_bytes()).unwrap();
+        self.stream.write(&response.as_bytes()).unwrap();
     }
 }
 impl Display for Connection {
@@ -150,7 +112,7 @@ impl Display for Connection {
     }
 }
 
-type MethodTable<'a> = HashMap<&'a str, fn() -> String>;
+type MethodTable<'a> = HashMap<&'a str, fn(data: &str) -> String>;
 pub struct App<'a> {
     put: MethodTable<'a>,
     post: MethodTable<'a>,
@@ -168,7 +130,7 @@ impl<'a> App<'a> {
             get: HashMap::new(),
         }
     }
-    pub fn create(&mut self, name: &'a str, method: Method, action: fn() -> String) {
+    pub fn create(&mut self, name: &'a str, method: Method, action: fn(data: &str) -> String) {
         match method {
             Method::GET => self.get.insert(name, action),
             Method::PUT => self.put.insert(name, action),
@@ -181,7 +143,7 @@ impl<'a> App<'a> {
         &self,
         endpoint: Endpoint,
         method: &'a Method,
-        connection: &mut TcpStream,
+        connection: &mut Connection,
     ) {
         let action = *match method {
             Method::GET => self.get.get(endpoint.get()).unwrap(),
@@ -190,16 +152,15 @@ impl<'a> App<'a> {
             Method::PATCH => self.patch.get(endpoint.get()).unwrap(),
             Method::DELETE => self.delete.get(endpoint.get()).unwrap(),
         };
-        let result = action();
-        Connection::write_response(connection, &result)
+        let result = action(&connection.content);
+        connection.write_response(&result);
     }
-    fn redirect_stream(&self, mut stream: TcpStream) {
-        let connection = Connection::new(&mut stream);
-        // println!("{connection}");
+    fn redirect_stream(&self, stream: TcpStream) {
+        let mut connection = Connection::new(stream);
         let method = connection.get_method();
         let endpoint = connection.get_endpoint();
 
-        self.handle_connection(endpoint, &method, &mut stream);
+        self.handle_connection(endpoint, &method, &mut connection);
     }
     pub fn listen(&self, port: u32) {
         let listener = TcpListener::bind(format!("127.0.0.1:{port}")).unwrap();
